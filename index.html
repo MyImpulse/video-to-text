@@ -34,8 +34,8 @@
   <h1>Субтитры → текст</h1>
   <p class="sub">Перетащи видео (mkv, mp4, mov…) или файл субтитров (srt, vtt, ass). Всё обрабатывается локально в браузере.</p>
 
-  <div id="drop">Нажми или перетащи файл сюда</div>
-  <input id="file" type="file" hidden accept="video/*,audio/*,.mkv,.srt,.vtt,.ass,.ssa">
+  <label id="drop" for="file" style="display:block">Нажми или перетащи файл сюда</label>
+  <input id="file" type="file" style="position:absolute;width:1px;height:1px;opacity:0" accept="video/*,audio/*,.mkv,.srt,.vtt,.ass,.ssa">
 
   <div class="row">
     <label>Номер дорожки субтитров <input id="track" type="number" min="0" value="0"></label>
@@ -69,8 +69,11 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
 <script>
+(function () {
+'use strict';
+window.addEventListener('error', e => { const el = document.getElementById('status'); if (el) el.textContent = 'Ошибка: ' + e.message; });
 const $ = id => document.getElementById(id);
-const status = t => $('status').textContent = t;
+const say = t => $('status').textContent = t;
 let ffmpeg, lastFile = null, lastName = 'subtitles', asr = null, asrModel = '';
 
 async function getFFmpeg() {
@@ -80,7 +83,7 @@ async function getFFmpeg() {
     log: false,
     corePath: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js'
   });
-  status('Загружаю ffmpeg (один раз, ~25 МБ)…');
+  say('Загружаю ffmpeg (один раз, ~25 МБ)…');
   await ffmpeg.load();
   return ffmpeg;
 }
@@ -103,31 +106,31 @@ async function handle(file) {
     const ff = await getFFmpeg();
     const isSubs = /\.(srt|vtt|ass|ssa)$/i.test(file.name);
     const inName = 'input' + (file.name.match(/\.[^.]+$/) || ['.bin'])[0];
-    status('Читаю файл…');
+    say('Читаю файл…');
     ff.FS('writeFile', inName, await FFmpeg.fetchFile(file));
-    status('Извлекаю субтитры…');
+    say('Извлекаю субтитры…');
     const args = ['-i', inName];
     if (!isSubs) args.push('-map', '0:s:' + ($('track').value || 0));
     args.push('out.srt');
     await ff.run(...args);
     const data = ff.FS('readFile', 'out.srt');
     $('out').value = srtToText(new TextDecoder('utf-8').decode(data), $('dedupe').checked);
-    status($('out').value ? 'Готово.' : 'Субтитры пустые.');
+    say($('out').value ? 'Готово.' : 'Субтитры пустые.');
     try { ff.FS('unlink', inName); ff.FS('unlink', 'out.srt'); } catch (e) {}
   } catch (e) {
     console.error(e);
-    status('Не удалось извлечь субтитры. Возможно, в видео нет текстовой дорожки (или она «вшита» в картинку), либо номер дорожки неверный.');
+    say('Не удалось извлечь субтитры. Возможно, в видео нет текстовой дорожки (или она «вшита» в картинку), либо номер дорожки неверный.');
   }
 }
 
 async function transcribe() {
-  if (!lastFile) { status('Сначала выбери видео или аудиофайл.'); return; }
-  if (/\.(srt|vtt|ass|ssa)$/i.test(lastFile.name)) { status('Это файл субтитров, а не аудио.'); return; }
+  if (!lastFile) { say('Сначала выбери видео или аудиофайл.'); return; }
+  if (/\.(srt|vtt|ass|ssa)$/i.test(lastFile.name)) { say('Это файл субтитров, а не аудио.'); return; }
   $('stt').disabled = true;
   try {
     const ff = await getFFmpeg();
     const inName = 'audio_in' + (lastFile.name.match(/\.[^.]+$/) || ['.bin'])[0];
-    status('Извлекаю аудио…');
+    say('Извлекаю аудио…');
     ff.FS('writeFile', inName, await FFmpeg.fetchFile(lastFile));
     await ff.run('-i', inName, '-vn', '-ac', '1', '-ar', '16000', '-f', 'f32le', 'audio.raw');
     const raw = ff.FS('readFile', 'audio.raw');
@@ -136,26 +139,26 @@ async function transcribe() {
 
     const model = $('model').value;
     if (!asr || asrModel !== model) {
-      status('Загружаю модель распознавания (один раз, кэшируется в браузере)…');
+      say('Загружаю модель распознавания (один раз, кэшируется в браузере)…');
       const { pipeline } = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2/+esm');
       asr = await pipeline('automatic-speech-recognition', model, {
         progress_callback: p => {
-          if (p.status === 'progress') status('Загрузка модели: ' + Math.round(p.progress) + '%');
+          if (p.status === 'progress') say('Загрузка модели: ' + Math.round(p.progress) + '%');
         }
       });
       asrModel = model;
     }
-    status('Распознаю речь… Для длинных записей это может занять несколько минут.');
+    say('Распознаю речь… Для длинных записей это может занять несколько минут.');
     const lang = $('lang').value;
     const res = await asr(audio, {
       chunk_length_s: 30, stride_length_s: 5, task: 'transcribe',
       ...(lang ? { language: lang } : {})
     });
     $('out').value = res.text.trim();
-    status('Готово.');
+    say('Готово.');
   } catch (e) {
     console.error(e);
-    status('Не удалось распознать речь: ' + (e.message || e));
+    say('Не удалось распознать речь: ' + (e.message || e));
   } finally {
     $('stt').disabled = false;
   }
@@ -163,15 +166,14 @@ async function transcribe() {
 $('stt').onclick = transcribe;
 
 const drop = $('drop'), fileInput = $('file');
-drop.onclick = () => fileInput.click();
-fileInput.onchange = () => handle(fileInput.files[0]);
+fileInput.onchange = () => { const f = fileInput.files[0]; fileInput.value = ''; handle(f); };
 drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
 drop.ondragleave = () => drop.classList.remove('over');
 drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); handle(e.dataTransfer.files[0]); };
 
 $('copy').onclick = async () => {
-  try { await navigator.clipboard.writeText($('out').value); status('Скопировано.'); }
-  catch (e) { $('out').select(); document.execCommand('copy'); status('Скопировано.'); }
+  try { await navigator.clipboard.writeText($('out').value); say('Скопировано.'); }
+  catch (e) { $('out').select(); document.execCommand('copy'); say('Скопировано.'); }
 };
 $('save').onclick = () => {
   const a = document.createElement('a');
@@ -179,6 +181,8 @@ $('save').onclick = () => {
   a.download = lastName + '.txt';
   a.click();
 };
+
+})();
 </script>
 </body>
 </html>
