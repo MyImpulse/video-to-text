@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Субтитры → текст</title>
+<title>Видео → текст</title>
 <style>
   :root { --bg:#fafaf7; --fg:#222; --muted:#777; --card:#fff; --line:#ddd; --accent:#3d5afe; }
   @media (prefers-color-scheme: dark) {
@@ -14,36 +14,38 @@
   main { max-width:760px; margin:0 auto; padding:24px 16px 48px; }
   h1 { font-size:1.4rem; margin:0 0 4px; }
   p.sub { color:var(--muted); margin:0 0 20px; }
-  #drop { border:2px dashed var(--line); border-radius:12px; padding:36px 16px; text-align:center;
-          background:var(--card); cursor:pointer; }
+  #drop { display:block; border:2px dashed var(--line); border-radius:12px; padding:36px 16px;
+          text-align:center; background:var(--card); cursor:pointer; }
   #drop.over { border-color:var(--accent); }
+  #file { position:absolute; width:1px; height:1px; opacity:0; }
   .row { display:flex; gap:12px; align-items:center; margin:16px 0; flex-wrap:wrap; }
   label { color:var(--muted); font-size:.9rem; }
-  input[type=number] { width:70px; padding:6px; border:1px solid var(--line); border-radius:6px;
-                       background:var(--card); color:var(--fg); }
-  button { padding:8px 14px; border:0; border-radius:8px; background:var(--accent); color:#fff;
-           font-size:.95rem; cursor:pointer; }
+  select { padding:6px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--fg); }
+  button { padding:8px 14px; border:0; border-radius:8px; background:var(--accent); color:#fff; font-size:.95rem; cursor:pointer; }
   button.alt { background:transparent; color:var(--accent); border:1px solid var(--accent); }
-  #status { color:var(--muted); font-size:.9rem; min-height:1.4em; }
+  #status { color:var(--muted); font-size:.9rem; min-height:1.4em; margin:8px 0; }
+  #card { display:none; align-items:center; gap:12px; margin:16px 0; padding:12px 14px; border:1px solid var(--line);
+          border-radius:12px; background:var(--card); }
+  #card .ico { font-size:1.6rem; }
+  #card .info { flex:1; min-width:0; }
+  #card .name { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #card .meta { color:var(--muted); font-size:.85rem; }
+  #run { width:100%; padding:14px; font-size:1.05rem; margin:4px 0 12px; }
+  #run:disabled { opacity:.4; cursor:not-allowed; }
+  #bar { display:none; height:6px; border-radius:3px; background:var(--line); overflow:hidden; margin:8px 0; }
+  #bar i { display:block; height:100%; width:0; background:var(--accent); transition:width .2s; }
+  #bar.indet i { width:35%; animation:slide 1.1s infinite ease-in-out; }
+  @keyframes slide { 0%{margin-left:-35%} 100%{margin-left:100%} }
   textarea { width:100%; min-height:320px; padding:12px; border:1px solid var(--line); border-radius:10px;
              background:var(--card); color:var(--fg); font:inherit; resize:vertical; }
 </style>
 </head>
 <body>
 <main>
-  <h1>Субтитры → текст</h1>
-  <p class="sub">Перетащи видео (mkv, mp4, mov…) или файл субтитров (srt, vtt, ass). Всё обрабатывается локально в браузере.</p>
-
-  <label id="drop" for="file" style="display:block">Нажми или перетащи файл сюда</label>
-  <input id="file" type="file" style="position:absolute;width:1px;height:1px;opacity:0" accept="video/*,audio/*,.mkv,.srt,.vtt,.ass,.ssa">
+  <h1>Видео → текст</h1>
+  <p class="sub">Выбери видео или аудио: речь будет расшифрована в текст. Файл субтитров (srt, vtt, ass) тоже можно: из него достанется чистый текст. Всё работает в браузере, файл никуда не отправляется.</p>
 
   <div class="row">
-    <label>Номер дорожки субтитров <input id="track" type="number" min="0" value="0"></label>
-    <label><input id="dedupe" type="checkbox" checked> убрать повторы строк</label>
-  </div>
-
-  <div class="row">
-    <button id="stt" class="alt">Распознать речь из аудио</button>
     <label>Модель
       <select id="model">
         <option value="Xenova/whisper-base">base (быстрее, ~80 МБ)</option>
@@ -59,7 +61,18 @@
     </label>
   </div>
 
-  <div id="status"></div>
+  <label id="drop" for="file">Нажми или перетащи файл сюда</label>
+  <input id="file" type="file" accept="video/*,audio/*,.mp4,.mov,.m4a,.mp3,.wav,.srt,.vtt,.ass,.ssa">
+
+  <div id="card">
+    <div class="ico" id="cardIco">🎬</div>
+    <div class="info"><div class="name" id="cardName"></div><div class="meta" id="cardMeta"></div></div>
+    <button class="alt" id="change" type="button">Другой файл</button>
+  </div>
+
+  <button id="run" type="button" disabled>Сначала выбери файл</button>
+  <div id="bar"><i></i></div>
+  <div id="status">Страница загружена. Шаг 1: выбери файл.</div>
   <textarea id="out" placeholder="Здесь появится текст…"></textarea>
   <div class="row">
     <button id="copy">Копировать</button>
@@ -67,121 +80,142 @@
   </div>
 </main>
 
-<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
 <script>
 (function () {
 'use strict';
-window.addEventListener('error', e => { const el = document.getElementById('status'); if (el) el.textContent = 'Ошибка: ' + e.message; });
 const $ = id => document.getElementById(id);
-const say = t => $('status').textContent = t;
-let ffmpeg, lastFile = null, lastName = 'subtitles', asr = null, asrModel = '';
+const say = t => { $('status').textContent = t; };
+let asr = null, asrModel = '', lastName = 'text', busy = false;
 
-async function getFFmpeg() {
-  if (ffmpeg) return ffmpeg;
-  const { createFFmpeg } = FFmpeg;
-  ffmpeg = createFFmpeg({
-    log: false,
-    corePath: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js'
-  });
-  say('Загружаю ffmpeg (один раз, ~25 МБ)…');
-  await ffmpeg.load();
-  return ffmpeg;
-}
+window.addEventListener('error', e => say('Ошибка: ' + e.message));
+window.addEventListener('unhandledrejection', e => say('Ошибка: ' + ((e.reason && e.reason.message) || e.reason)));
 
-function srtToText(srt, dedupe) {
-  const lines = srt.replace(/\r/g, '').split('\n').filter(l => {
-    const s = l.trim();
-    return s && !/^\d+$/.test(s) && !/-->/.test(s);
-  }).map(l => l.replace(/<[^>]+>/g, '').replace(/\{[^}]*\}/g, '').trim()).filter(Boolean);
-  if (!dedupe) return lines.join('\n');
+/* ---------- субтитры -> текст ---------- */
+function subsToText(src, name) {
+  let lines;
+  if (/\.(ass|ssa)$/i.test(name)) {
+    lines = src.split(/\r?\n/).filter(l => /^Dialogue:/i.test(l))
+      .map(l => l.split(',').slice(9).join(',').replace(/\\[Nn]/g, ' '));
+  } else {
+    lines = src.replace(/\r/g, '').split('\n').filter(l => {
+      const s = l.trim();
+      return s && !/^\d+$/.test(s) && !/-->/.test(s) && !/^WEBVTT/.test(s) && !/^NOTE\b/.test(s);
+    });
+  }
+  lines = lines.map(l => l.replace(/<[^>]+>/g, '').replace(/\{[^}]*\}/g, '').trim()).filter(Boolean);
   return lines.filter((l, i) => l !== lines[i - 1]).join('\n');
 }
 
-async function handle(file) {
-  if (!file) return;
-  lastFile = file;
+/* ---------- аудио из видео (средствами браузера) ---------- */
+async function decodeAudio(file) {
+  const buf = await file.arrayBuffer();
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AC();
+  const decoded = await new Promise((res, rej) => ctx.decodeAudioData(buf, res, rej));
+  ctx.close();
+  const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  const off = new OAC(1, Math.ceil(decoded.duration * 16000), 16000);
+  const src = off.createBufferSource();
+  src.buffer = decoded;
+  src.connect(off.destination);
+  src.start();
+  const rendered = await off.startRendering();
+  return rendered.getChannelData(0);
+}
+
+/* ---------- распознавание речи ---------- */
+async function transcribe(file) {
+  say('Извлекаю звук из файла…'); bar('indet');
+  let audio;
+  try { audio = await decodeAudio(file); }
+  catch (e) { throw new Error('браузер не смог прочитать звук из этого файла (' + (e.message || e) + ')'); }
+
+  const model = $('model').value;
+  if (!asr || asrModel !== model) {
+    say('Загружаю модель распознавания (первый раз долго, потом берётся из кэша)…');
+    const { pipeline } = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2/+esm');
+    asr = await pipeline('automatic-speech-recognition', model, {
+      progress_callback: p => { if (p.status === 'progress') { say('Загрузка модели: ' + Math.round(p.progress) + '%'); bar('pct', p.progress); } }
+    });
+    asrModel = model;
+  }
+  say('Распознаю речь… Это может занять несколько минут, не закрывай вкладку.'); bar('indet');
+  const lang = $('lang').value;
+  const res = await asr(audio, {
+    chunk_length_s: 30, stride_length_s: 5, task: 'transcribe',
+    ...(lang ? { language: lang } : {})
+  });
+  return res.text.trim();
+}
+
+let currentFile = null;
+const isSubs = f => /\.(srt|vtt|ass|ssa)$/i.test(f.name);
+const mb = n => (n / 1048576).toFixed(1) + ' МБ';
+
+function bar(mode, pct) {
+  const b = $('bar');
+  if (!mode) { b.style.display = 'none'; b.classList.remove('indet'); return; }
+  b.style.display = 'block';
+  b.classList.toggle('indet', mode === 'indet');
+  if (mode === 'pct') b.firstElementChild.style.width = pct + '%';
+}
+
+function setFile(file) {
+  if (!file || busy) return;
+  currentFile = file;
   lastName = file.name.replace(/\.[^.]+$/, '');
   $('out').value = '';
-  try {
-    const ff = await getFFmpeg();
-    const isSubs = /\.(srt|vtt|ass|ssa)$/i.test(file.name);
-    const inName = 'input' + (file.name.match(/\.[^.]+$/) || ['.bin'])[0];
-    say('Читаю файл…');
-    ff.FS('writeFile', inName, await FFmpeg.fetchFile(file));
-    say('Извлекаю субтитры…');
-    const args = ['-i', inName];
-    if (!isSubs) args.push('-map', '0:s:' + ($('track').value || 0));
-    args.push('out.srt');
-    await ff.run(...args);
-    const data = ff.FS('readFile', 'out.srt');
-    $('out').value = srtToText(new TextDecoder('utf-8').decode(data), $('dedupe').checked);
-    say($('out').value ? 'Готово.' : 'Субтитры пустые.');
-    try { ff.FS('unlink', inName); ff.FS('unlink', 'out.srt'); } catch (e) {}
-  } catch (e) {
-    console.error(e);
-    say('Не удалось извлечь субтитры. Возможно, в видео нет текстовой дорожки (или она «вшита» в картинку), либо номер дорожки неверный.');
-  }
+  bar(null);
+  $('card').style.display = 'flex';
+  $('cardIco').textContent = isSubs(file) ? '📝' : (file.type.startsWith('audio') ? '🎧' : '🎬');
+  $('cardName').textContent = file.name;
+  $('cardMeta').textContent = mb(file.size) + ' · файл загружен ✓';
+  $('drop').textContent = 'Выбрать другой файл';
+  $('run').disabled = false;
+  $('run').textContent = isSubs(file) ? 'Достать текст из субтитров' : 'Перевести в текст';
+  say('Шаг 2: файл загружен. Нажми кнопку «' + $('run').textContent + '».');
 }
 
-async function transcribe() {
-  if (!lastFile) { say('Сначала выбери видео или аудиофайл.'); return; }
-  if (/\.(srt|vtt|ass|ssa)$/i.test(lastFile.name)) { say('Это файл субтитров, а не аудио.'); return; }
-  $('stt').disabled = true;
+async function run() {
+  if (!currentFile || busy) return;
+  busy = true;
+  $('run').disabled = true;
+  $('out').value = '';
   try {
-    const ff = await getFFmpeg();
-    const inName = 'audio_in' + (lastFile.name.match(/\.[^.]+$/) || ['.bin'])[0];
-    say('Извлекаю аудио…');
-    ff.FS('writeFile', inName, await FFmpeg.fetchFile(lastFile));
-    await ff.run('-i', inName, '-vn', '-ac', '1', '-ar', '16000', '-f', 'f32le', 'audio.raw');
-    const raw = ff.FS('readFile', 'audio.raw');
-    const audio = new Float32Array(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
-    try { ff.FS('unlink', inName); ff.FS('unlink', 'audio.raw'); } catch (e) {}
-
-    const model = $('model').value;
-    if (!asr || asrModel !== model) {
-      say('Загружаю модель распознавания (один раз, кэшируется в браузере)…');
-      const { pipeline } = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2/+esm');
-      asr = await pipeline('automatic-speech-recognition', model, {
-        progress_callback: p => {
-          if (p.status === 'progress') say('Загрузка модели: ' + Math.round(p.progress) + '%');
-        }
-      });
-      asrModel = model;
-    }
-    say('Распознаю речь… Для длинных записей это может занять несколько минут.');
-    const lang = $('lang').value;
-    const res = await asr(audio, {
-      chunk_length_s: 30, stride_length_s: 5, task: 'transcribe',
-      ...(lang ? { language: lang } : {})
-    });
-    $('out').value = res.text.trim();
-    say('Готово.');
+    let text;
+    if (isSubs(currentFile)) text = subsToText(await currentFile.text(), currentFile.name);
+    else text = await transcribe(currentFile);
+    $('out').value = text;
+    say(text ? 'Шаг 3: готово! Текст внизу, его можно скопировать или скачать.' : 'Текст не найден.');
   } catch (e) {
     console.error(e);
-    say('Не удалось распознать речь: ' + (e.message || e));
+    say('Не получилось: ' + (e.message || e));
   } finally {
-    $('stt').disabled = false;
+    busy = false;
+    bar(null);
+    $('run').disabled = false;
+    $('run').textContent = 'Перевести ещё раз';
   }
 }
-$('stt').onclick = transcribe;
 
 const drop = $('drop'), fileInput = $('file');
-fileInput.onchange = () => { const f = fileInput.files[0]; fileInput.value = ''; handle(f); };
-drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
-drop.ondragleave = () => drop.classList.remove('over');
-drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); handle(e.dataTransfer.files[0]); };
+fileInput.addEventListener('change', () => { const f = fileInput.files[0]; fileInput.value = ''; setFile(f); });
+$('change').addEventListener('click', () => fileInput.click());
+$('run').addEventListener('click', run);
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); setFile(e.dataTransfer.files[0]); });
 
-$('copy').onclick = async () => {
+$('copy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText($('out').value); say('Скопировано.'); }
   catch (e) { $('out').select(); document.execCommand('copy'); say('Скопировано.'); }
-};
-$('save').onclick = () => {
+});
+$('save').addEventListener('click', () => {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([$('out').value], { type: 'text/plain;charset=utf-8' }));
   a.download = lastName + '.txt';
   a.click();
-};
-
+});
 })();
 </script>
 </body>
