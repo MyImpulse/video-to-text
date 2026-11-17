@@ -48,8 +48,8 @@
   <div class="row">
     <label>Модель
       <select id="model">
-        <option value="Xenova/whisper-tiny">tiny (самая лёгкая, ~40 МБ, для телефона)</option>
-        <option value="Xenova/whisper-base" selected>base (~80 МБ, золотая середина)</option>
+        <option value="Xenova/whisper-tiny" selected>tiny (самая лёгкая, ~40 МБ, для телефона)</option>
+        <option value="Xenova/whisper-base">base (~80 МБ, золотая середина)</option>
         <option value="Xenova/whisper-small">small (точнее, ~250 МБ, только компьютер)</option>
       </select>
     </label>
@@ -138,7 +138,8 @@ async function transcribe(file) {
   const model = $('model').value;
   if (!asr || asrModel !== model) {
     say('Загружаю модель распознавания (первый раз долго, потом берётся из кэша)…');
-    const { pipeline } = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2/+esm');
+    const { pipeline, env } = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2/+esm');
+    try { env.backends.onnx.wasm.numThreads = 1; } catch (e) {}
     asr = await pipeline('automatic-speech-recognition', model, {
       progress_callback: p => { if (p.status === 'progress') { say('Загрузка модели: ' + Math.round(p.progress) + '%'); bar('pct', p.progress); } }
     });
@@ -154,7 +155,7 @@ async function transcribe(file) {
     say('Распознаю речь: часть ' + (i + 1) + ' из ' + total + '. Не закрывай и не сворачивай вкладку.');
     bar('pct', (i / total) * 100);
     const part = audio.slice(i * SLICE, (i + 1) * SLICE);
-    const res = await asr(part, { task: 'transcribe', ...(lang ? { language: lang } : {}) });
+    const res = await asr(part, { task: 'transcribe', max_new_tokens: 128, ...(lang ? { language: lang } : {}) });
     text += (text ? ' ' : '') + res.text.trim();
     $('out').value = text;
     try { localStorage.setItem('stt_partial', JSON.stringify({ name: lastName, text })); } catch (e) {}
@@ -227,7 +228,11 @@ try {
 
 try {
   const last = localStorage.getItem('stt_step');
-  if (last) { say('Страница перезагрузилась. Последний шаг перед этим: ' + last + '.'); localStorage.removeItem('stt_step'); }
+  if (last) {
+    let msg = 'Страница перезагрузилась. Последний шаг перед этим: ' + last + '.';
+    if (/распознавание/.test(last)) { $('model').value = 'Xenova/whisper-tiny'; msg += ' Похоже, устройству не хватило памяти: выбрана самая лёгкая модель tiny, попробуй ещё раз.'; }
+    say(msg); localStorage.removeItem('stt_step');
+  }
 } catch (e) {}
 
 const drop = $('drop'), fileInput = $('file');
