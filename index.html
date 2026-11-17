@@ -86,6 +86,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const say = t => { $('status').textContent = t; };
+const mark = st => { try { if (st) localStorage.setItem('stt_step', st + ' (' + new Date().toLocaleTimeString() + ')'); else localStorage.removeItem('stt_step'); } catch (e) {} };
 let asr = null, asrModel = '', lastName = 'text', busy = false;
 
 window.addEventListener('error', e => say('Ошибка: ' + e.message));
@@ -126,11 +127,12 @@ async function decodeAudio(file) {
 
 /* ---------- распознавание речи ---------- */
 async function transcribe(file) {
-  say('Извлекаю звук из файла…'); bar('indet');
+  mark('извлечение звука'); say('Извлекаю звук из файла…'); bar('indet');
   let audio;
   try { audio = await decodeAudio(file); }
   catch (e) { throw new Error('браузер не смог прочитать звук из этого файла (' + (e.message || e) + ')'); }
 
+  mark('звук извлечён, начинаю загрузку модели');
   const model = $('model').value;
   if (!asr || asrModel !== model) {
     say('Загружаю модель распознавания (первый раз долго, потом берётся из кэша)…');
@@ -139,12 +141,14 @@ async function transcribe(file) {
       progress_callback: p => { if (p.status === 'progress') { say('Загрузка модели: ' + Math.round(p.progress) + '%'); bar('pct', p.progress); } }
     });
     asrModel = model;
+    mark('модель загружена');
   }
   const lang = $('lang').value;
   const SLICE = 30 * 16000;
   const total = Math.max(1, Math.ceil(audio.length / SLICE));
   let text = '';
   for (let i = 0; i < total; i++) {
+    mark('распознавание, часть ' + (i + 1) + ' из ' + total);
     say('Распознаю речь: часть ' + (i + 1) + ' из ' + total + '. Не закрывай и не сворачивай вкладку.');
     bar('pct', (i / total) * 100);
     const part = audio.slice(i * SLICE, (i + 1) * SLICE);
@@ -154,6 +158,7 @@ async function transcribe(file) {
     try { localStorage.setItem('stt_partial', JSON.stringify({ name: lastName, text })); } catch (e) {}
   }
   bar('pct', 100);
+  mark(null);
   return text;
 }
 
@@ -171,6 +176,7 @@ function bar(mode, pct) {
 
 function setFile(file) {
   if (!file || busy) return;
+  mark('файл выбран, жду нажатия кнопки');
   currentFile = file;
   lastName = file.name.replace(/\.[^.]+$/, '');
   $('out').value = '';
@@ -213,8 +219,13 @@ try {
     say('Восстановлен текст с прошлой попытки (' + saved.name + '). Он мог не дойти до конца.'); }
 } catch (e) {}
 
+try {
+  const last = localStorage.getItem('stt_step');
+  if (last) { say('Страница перезагрузилась. Последний шаг перед этим: ' + last + '.'); localStorage.removeItem('stt_step'); }
+} catch (e) {}
+
 const drop = $('drop'), fileInput = $('file');
-fileInput.addEventListener('change', () => { const f = fileInput.files[0]; fileInput.value = ''; setFile(f); });
+fileInput.addEventListener('change', () => { setFile(fileInput.files[0]); });
 $('change').addEventListener('click', () => fileInput.click());
 $('run').addEventListener('click', run);
 drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
