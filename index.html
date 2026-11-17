@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Субтитры → текст</title>
+<style>
+  :root { --bg:#fafaf7; --fg:#222; --muted:#777; --card:#fff; --line:#ddd; --accent:#3d5afe; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#16161a; --fg:#eee; --muted:#999; --card:#1f1f25; --line:#333; --accent:#8c9eff; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  main { max-width:760px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:1.4rem; margin:0 0 4px; }
+  p.sub { color:var(--muted); margin:0 0 20px; }
+  #drop { border:2px dashed var(--line); border-radius:12px; padding:36px 16px; text-align:center;
+          background:var(--card); cursor:pointer; }
+  #drop.over { border-color:var(--accent); }
+  .row { display:flex; gap:12px; align-items:center; margin:16px 0; flex-wrap:wrap; }
+  label { color:var(--muted); font-size:.9rem; }
+  input[type=number] { width:70px; padding:6px; border:1px solid var(--line); border-radius:6px;
+                       background:var(--card); color:var(--fg); }
+  button { padding:8px 14px; border:0; border-radius:8px; background:var(--accent); color:#fff;
+           font-size:.95rem; cursor:pointer; }
+  button.alt { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  #status { color:var(--muted); font-size:.9rem; min-height:1.4em; }
+  textarea { width:100%; min-height:320px; padding:12px; border:1px solid var(--line); border-radius:10px;
+             background:var(--card); color:var(--fg); font:inherit; resize:vertical; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Субтитры → текст</h1>
+  <p class="sub">Перетащи видео (mkv, mp4, mov…) или файл субтитров (srt, vtt, ass). Всё обрабатывается локально в браузере.</p>
+
+  <div id="drop">Нажми или перетащи файл сюда</div>
+  <input id="file" type="file" hidden accept="video/*,audio/*,.mkv,.srt,.vtt,.ass,.ssa">
+
+  <div class="row">
+    <label>Номер дорожки субтитров <input id="track" type="number" min="0" value="0"></label>
+    <label><input id="dedupe" type="checkbox" checked> убрать повторы строк</label>
+  </div>
+
+  <div class="row">
+    <button id="stt" class="alt">Распознать речь из аудио</button>
+    <label>Модель
+      <select id="model">
+        <option value="Xenova/whisper-base">base (быстрее, ~80 МБ)</option>
+        <option value="Xenova/whisper-small" selected>small (точнее, ~250 МБ)</option>
+      </select>
+    </label>
+    <label>Язык
+      <select id="lang">
+        <option value="russian" selected>русский</option>
+        <option value="english">английский</option>
+        <option value="">авто</option>
+      </select>
+    </label>
+  </div>
+
+  <div id="status"></div>
+  <textarea id="out" placeholder="Здесь появится текст…"></textarea>
+  <div class="row">
+    <button id="copy">Копировать</button>
+    <button id="save" class="alt">Скачать .txt</button>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const status = t => $('status').textContent = t;
+let ffmpeg, lastFile = null, lastName = 'subtitles', asr = null, asrModel = '';
+
+async function getFFmpeg() {
+  if (ffmpeg) return ffmpeg;
+  const { createFFmpeg } = FFmpeg;
+  ffmpeg = createFFmpeg({
+    log: false,
+    corePath: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js'
+  });
+  status('Загружаю ffmpeg (один раз, ~25 МБ)…');
+  await ffmpeg.load();
+  return ffmpeg;
+}
+
+function srtToText(srt, dedupe) {
+  const lines = srt.replace(/\r/g, '').split('\n').filter(l => {
+    const s = l.trim();
+    return s && !/^\d+$/.test(s) && !/-->/.test(s);
+  }).map(l => l.replace(/<[^>]+>/g, '').replace(/\{[^}]*\}/g, '').trim()).filter(Boolean);
+  if (!dedupe) return lines.join('\n');
+  return lines.filter((l, i) => l !== lines[i - 1]).join('\n');
+}
+
+async function handle(file) {
+  if (!file) return;
+  lastFile = file;
+  lastName = file.name.replace(/\.[^.]+$/, '');
+  $('out').value = '';
+  try {
+    const ff = await getFFmpeg();
+    const isSubs = /\.(srt|vtt|ass|ssa)$/i.test(file.name);
+    const inName = 'input' + (file.name.match(/\.[^.]+$/) || ['.bin'])[0];
+    status('Читаю файл…');
+    ff.FS('writeFile', inName, await FFmpeg.fetchFile(file));
+    status('Извлекаю субтитры…');
+    const args = ['-i', inName];
+    if (!isSubs) args.push('-map', '0:s:' + ($('track').value || 0));
+    args.push('out.srt');
+    await ff.run(...args);
+    const data = ff.FS('readFile', 'out.srt');
+    $('out').value = srtToText(new TextDecoder('utf-8').decode(data), $('dedupe').checked);
+    status($('out').value ? 'Готово.' : 'Субтитры пустые.');
+    try { ff.FS('unlink', inName); ff.FS('unlink', 'out.srt'); } catch (e) {}
+  } catch (e) {
+    console.error(e);
+    status('Не удалось извлечь субтитры. Возможно, в видео нет текстовой дорожки (или она «вшита» в картинку), либо номер дорожки неверный.');
+  }
+}
+
+async function transcribe() {
+  if (!lastFile) { status('Сначала выбери видео или аудиофайл.'); return; }
+  if (/\.(srt|vtt|ass|ssa)$/i.test(lastFile.name)) { status('Это файл субтитров, а не аудио.'); return; }
+  $('stt').disabled = true;
+  try {
+    const ff = await getFFmpeg();
+    const inName = 'audio_in' + (lastFile.name.match(/\.[^.]+$/) || ['.bin'])[0];
+    status('Извлекаю аудио…');
+    ff.FS('writeFile', inName, await FFmpeg.fetchFile(lastFile));
+    await ff.run('-i', inName, '-vn', '-ac', '1', '-ar', '16000', '-f', 'f32le', 'audio.raw');
+    const raw = ff.FS('readFile', 'audio.raw');
+    const audio = new Float32Array(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
+    try { ff.FS('unlink', inName); ff.FS('unlink', 'audio.raw'); } catch (e) {}
+
+    const model = $('model').value;
+    if (!asr || asrModel !== model) {
+      status('Загружаю модель распознавания (один раз, кэшируется в браузере)…');
+      const { pipeline } = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2/+esm');
+      asr = await pipeline('automatic-speech-recognition', model, {
+        progress_callback: p => {
+          if (p.status === 'progress') status('Загрузка модели: ' + Math.round(p.progress) + '%');
+        }
+      });
+      asrModel = model;
+    }
+    status('Распознаю речь… Для длинных записей это может занять несколько минут.');
+    const lang = $('lang').value;
+    const res = await asr(audio, {
+      chunk_length_s: 30, stride_length_s: 5, task: 'transcribe',
+      ...(lang ? { language: lang } : {})
+    });
+    $('out').value = res.text.trim();
+    status('Готово.');
+  } catch (e) {
+    console.error(e);
+    status('Не удалось распознать речь: ' + (e.message || e));
+  } finally {
+    $('stt').disabled = false;
+  }
+}
+$('stt').onclick = transcribe;
+
+const drop = $('drop'), fileInput = $('file');
+drop.onclick = () => fileInput.click();
+fileInput.onchange = () => handle(fileInput.files[0]);
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); handle(e.dataTransfer.files[0]); };
+
+$('copy').onclick = async () => {
+  try { await navigator.clipboard.writeText($('out').value); status('Скопировано.'); }
+  catch (e) { $('out').select(); document.execCommand('copy'); status('Скопировано.'); }
+};
+$('save').onclick = () => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([$('out').value], { type: 'text/plain;charset=utf-8' }));
+  a.download = lastName + '.txt';
+  a.click();
+};
+</script>
+</body>
+</html>
