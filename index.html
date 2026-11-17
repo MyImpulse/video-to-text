@@ -155,7 +155,7 @@ async function transcribe(file) {
     say('Распознаю речь: часть ' + (i + 1) + ' из ' + total + '. Не закрывай и не сворачивай вкладку.');
     bar('pct', (i / total) * 100);
     const part = audio.slice(i * SLICE, (i + 1) * SLICE);
-    const res = await asr(part, { task: 'transcribe', max_new_tokens: 128, ...(lang ? { language: lang } : {}) });
+    const res = await asr(part, { task: 'transcribe', max_new_tokens: 440, ...(lang ? { language: lang } : {}) });
     text += (text ? ' ' : '') + res.text.trim();
     $('out').value = text;
     try { localStorage.setItem('stt_partial', JSON.stringify({ name: lastName, text })); } catch (e) {}
