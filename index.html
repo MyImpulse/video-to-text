@@ -43,10 +43,27 @@
 <body>
 <main>
   <h1>Видео → текст</h1>
-  <p class="sub">Выбери видео или аудио: речь будет расшифрована в текст. Файл субтитров (srt, vtt, ass) тоже можно: из него достанется чистый текст. Всё работает в браузере, файл никуда не отправляется.</p>
+  <p class="sub">Выбери видео или аудио: речь будет расшифрована в текст. Файл субтитров (srt, vtt, ass) тоже можно: из него достанется чистый текст. В режиме «Онлайн» звук отправляется в выбранный сервис распознавания, в режиме «В браузере» ничего никуда не уходит.</p>
 
   <div class="row">
-    <label>Модель
+    <label>Режим
+      <select id="mode">
+        <option value="cloud" selected>Онлайн (точный, нужен API-ключ)</option>
+        <option value="local">В браузере (бесплатно, слабее)</option>
+      </select>
+    </label>
+    <label>Сервис
+      <select id="prov">
+        <option value="groq" selected>Groq (whisper-large-v3)</option>
+        <option value="openai">OpenAI (whisper-1)</option>
+      </select>
+    </label>
+  </div>
+  <div class="row"><input id="key" type="password" autocomplete="off" placeholder="API-ключ (хранится только в этом браузере)" style="flex:1;min-width:220px;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)"></div>
+  <div class="row"><input id="hint" placeholder="Подсказка: термины и имена через запятую (необязательно)" style="flex:1;min-width:220px;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)"></div>
+
+  <div class="row">
+    <label>Модель (для режима «в браузере»)
       <select id="model">
         <option value="Xenova/whisper-tiny" selected>tiny (самая лёгкая, ~40 МБ, для телефона)</option>
         <option value="Xenova/whisper-base">base (~80 МБ, золотая середина)</option>
@@ -127,6 +144,61 @@ async function decodeAudio(file) {
   return rendered.getChannelData(0);
 }
 
+/* ---------- онлайн-распознавание ---------- */
+function wavBlob(f32) {
+  const n = f32.length, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const w = (o, t) => { for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, 16000, true); v.setUint32(28, 32000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  w(36, 'data'); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) { const x = Math.max(-1, Math.min(1, f32[i])); v.setInt16(44 + i * 2, x < 0 ? x * 0x8000 : x * 0x7fff, true); }
+  return new Blob([buf], { type: 'audio/wav' });
+}
+
+async function transcribeCloud(file) {
+  const prov = $('prov').value, key = $('key').value.trim();
+  if (!key) throw new Error('вставь API-ключ в поле выше');
+  try { localStorage.setItem('stt_key_' + prov, key); } catch (e) {}
+  mark('извлечение звука'); bar('indet'); say('Извлекаю звук из файла…');
+  let audio;
+  try { audio = await decodeAudio(file); }
+  catch (e) { throw new Error('браузер не смог прочитать звук из этого файла (' + (e.message || e) + ')'); }
+  const url = prov === 'groq' ? 'https://api.groq.com/openai/v1/audio/transcriptions' : 'https://api.openai.com/v1/audio/transcriptions';
+  const model = prov === 'groq' ? 'whisper-large-v3' : 'whisper-1';
+  const lang = { russian: 'ru', english: 'en' }[$('lang').value];
+  const SLICE = 10 * 60 * 16000, total = Math.max(1, Math.ceil(audio.length / SLICE));
+  let text = '';
+  for (let i = 0; i < total; i++) {
+    mark('онлайн-распознавание, часть ' + (i + 1) + ' из ' + total);
+    say('Отправляю на распознавание: часть ' + (i + 1) + ' из ' + total + '…'); bar('indet');
+    const fd = new FormData();
+    fd.append('file', wavBlob(audio.slice(i * SLICE, (i + 1) * SLICE)), 'part' + (i + 1) + '.wav');
+    fd.append('model', model); fd.append('response_format', 'json'); fd.append('temperature', '0');
+    if (lang) fd.append('language', lang);
+    const hint = $('hint').value.trim(); if (hint) fd.append('prompt', hint);
+    let r;
+    try { r = await fetch(url, { method: 'POST', headers: { Authorization: 'Bearer ' + key }, body: fd }); }
+    catch (e) { throw new Error('нет связи с сервисом (проверь интернет) или он не пускает запросы из браузера'); }
+    if (!r.ok) {
+      let m = ''; try { m = (await r.json()).error.message; } catch (e) {}
+      throw new Error('сервис ответил ' + r.status + (r.status === 401 ? ' (неверный ключ)' : r.status === 429 ? ' (превышен лимит)' : '') + (m ? ': ' + m : ''));
+    }
+    const j = await r.json();
+    text += (text ? '\n\n' : '') + (j.text || '').trim();
+    $('out').value = text;
+    try { localStorage.setItem('stt_partial', JSON.stringify({ name: lastName, text })); } catch (e) {}
+  }
+  mark(null);
+  return text;
+}
+
+/* ---------- защита от зацикливания Whisper ---------- */
+function collapseLoops(t) {
+  // фраза из 1-8 слов, повторённая 3+ раза подряд, оставляем один раз
+  return t.replace(/((?:\S+\s+){1,8}?)\1{2,}/g, '$1').replace(/\s{2,}/g, ' ').trim();
+}
+
 /* ---------- распознавание речи ---------- */
 async function transcribe(file) {
   mark('извлечение звука'); say('Извлекаю звук из файла…'); bar('indet');
@@ -155,8 +227,8 @@ async function transcribe(file) {
     say('Распознаю речь: часть ' + (i + 1) + ' из ' + total + '. Не закрывай и не сворачивай вкладку.');
     bar('pct', (i / total) * 100);
     const part = audio.slice(i * SLICE, (i + 1) * SLICE);
-    const res = await asr(part, { task: 'transcribe', max_new_tokens: 440, ...(lang ? { language: lang } : {}) });
-    text += (text ? ' ' : '') + res.text.trim();
+    const res = await asr(part, { task: 'transcribe', max_new_tokens: 300, no_repeat_ngram_size: 5, repetition_penalty: 1.1, ...(lang ? { language: lang } : {}) });
+    text += (text ? ' ' : '') + collapseLoops(res.text.trim());
     $('out').value = text;
     try { localStorage.setItem('stt_partial', JSON.stringify({ name: lastName, text })); } catch (e) {}
   }
@@ -204,7 +276,7 @@ async function run() {
   try {
     let text;
     if (isSubs(currentFile)) text = subsToText(await currentFile.text(), currentFile.name);
-    else text = await transcribe(currentFile);
+    else text = ($('mode').value === 'cloud') ? await transcribeCloud(currentFile) : await transcribe(currentFile);
     $('out').value = text;
     say(text ? 'Шаг 3: готово! Текст внизу, его можно скопировать или скачать.' : 'Текст не найден.');
     if (text && $('auto').checked) { try { saveTxt(); } catch (e) {} }
@@ -234,6 +306,9 @@ try {
     say(msg); localStorage.removeItem('stt_step');
   }
 } catch (e) {}
+
+function loadKey() { try { $('key').value = localStorage.getItem('stt_key_' + $('prov').value) || ''; } catch (e) {} }
+$('prov').addEventListener('change', loadKey); loadKey();
 
 const drop = $('drop'), fileInput = $('file');
 fileInput.addEventListener('change', () => { setFile(fileInput.files[0]); });
