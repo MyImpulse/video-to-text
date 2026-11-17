@@ -62,6 +62,8 @@
     </label>
   </div>
 
+  <div class="row"><label><input type="checkbox" id="auto" checked> Сразу скачать .txt, когда закончится (на случай, если страница перезагрузится)</label></div>
+
   <label id="drop" for="file">Нажми или перетащи файл сюда</label>
   <input id="file" type="file" accept="video/*,audio/*,.mp4,.mov,.m4a,.mp3,.wav,.srt,.vtt,.ass,.ssa">
 
@@ -196,16 +198,20 @@ async function run() {
   busy = true;
   $('run').disabled = true;
   $('out').value = '';
+  let lock = null;
+  try { if (navigator.wakeLock) lock = await navigator.wakeLock.request('screen'); } catch (e) {}
   try {
     let text;
     if (isSubs(currentFile)) text = subsToText(await currentFile.text(), currentFile.name);
     else text = await transcribe(currentFile);
     $('out').value = text;
     say(text ? 'Шаг 3: готово! Текст внизу, его можно скопировать или скачать.' : 'Текст не найден.');
+    if (text && $('auto').checked) { try { saveTxt(); } catch (e) {} }
   } catch (e) {
     console.error(e);
     say('Не получилось: ' + (e.message || e));
   } finally {
+    try { if (lock) lock.release(); } catch (e) {}
     busy = false;
     bar(null);
     $('run').disabled = false;
@@ -236,12 +242,16 @@ $('copy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText($('out').value); say('Скопировано.'); }
   catch (e) { $('out').select(); document.execCommand('copy'); say('Скопировано.'); }
 });
-$('save').addEventListener('click', () => {
+function saveTxt() {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([$('out').value], { type: 'text/plain;charset=utf-8' }));
   a.download = lastName + '.txt';
+  document.body.appendChild(a);
   a.click();
-});
+  a.remove();
+}
+$('save').addEventListener('click', saveTxt);
+document.addEventListener('visibilitychange', () => { if (document.hidden && busy) mark('вкладка ушла в фон во время работы'); });
 })();
 </script>
 </body>
