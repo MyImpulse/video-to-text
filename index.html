@@ -48,8 +48,9 @@
   <div class="row">
     <label>Модель
       <select id="model">
-        <option value="Xenova/whisper-base">base (быстрее, ~80 МБ)</option>
-        <option value="Xenova/whisper-small" selected>small (точнее, ~250 МБ)</option>
+        <option value="Xenova/whisper-tiny">tiny (самая лёгкая, ~40 МБ, для телефона)</option>
+        <option value="Xenova/whisper-base" selected>base (~80 МБ, золотая середина)</option>
+        <option value="Xenova/whisper-small">small (точнее, ~250 МБ, только компьютер)</option>
       </select>
     </label>
     <label>Язык
@@ -139,13 +140,21 @@ async function transcribe(file) {
     });
     asrModel = model;
   }
-  say('Распознаю речь… Это может занять несколько минут, не закрывай вкладку.'); bar('indet');
   const lang = $('lang').value;
-  const res = await asr(audio, {
-    chunk_length_s: 30, stride_length_s: 5, task: 'transcribe',
-    ...(lang ? { language: lang } : {})
-  });
-  return res.text.trim();
+  const SLICE = 30 * 16000;
+  const total = Math.max(1, Math.ceil(audio.length / SLICE));
+  let text = '';
+  for (let i = 0; i < total; i++) {
+    say('Распознаю речь: часть ' + (i + 1) + ' из ' + total + '. Не закрывай и не сворачивай вкладку.');
+    bar('pct', (i / total) * 100);
+    const part = audio.slice(i * SLICE, (i + 1) * SLICE);
+    const res = await asr(part, { task: 'transcribe', ...(lang ? { language: lang } : {}) });
+    text += (text ? ' ' : '') + res.text.trim();
+    $('out').value = text;
+    try { localStorage.setItem('stt_partial', JSON.stringify({ name: lastName, text })); } catch (e) {}
+  }
+  bar('pct', 100);
+  return text;
 }
 
 let currentFile = null;
@@ -197,6 +206,12 @@ async function run() {
     $('run').textContent = 'Перевести ещё раз';
   }
 }
+
+try {
+  const saved = JSON.parse(localStorage.getItem('stt_partial') || 'null');
+  if (saved && saved.text) { $('out').value = saved.text; lastName = saved.name || lastName;
+    say('Восстановлен текст с прошлой попытки (' + saved.name + '). Он мог не дойти до конца.'); }
+} catch (e) {}
 
 const drop = $('drop'), fileInput = $('file');
 fileInput.addEventListener('change', () => { const f = fileInput.files[0]; fileInput.value = ''; setFile(f); });
